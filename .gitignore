@@ -10,4 +10,5 @@ target/
 bin/
 *.env
 *.log
+.mcr-compare.properties
 .DS_Store

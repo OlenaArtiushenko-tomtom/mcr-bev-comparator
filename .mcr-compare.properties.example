@@ -1,0 +1,17 @@
+# MCR-BEV Comparator Configuration
+# Copy this file to .mcr-compare.properties and fill in your values.
+# Do NOT commit .mcr-compare.properties — it contains secrets.
+#
+# Resolution order (first found wins):
+#   1. CLI arguments (--token, --host, --http-path, --jdbc-url)
+#   2. Environment variables (DATABRICKS_TOKEN, DATABRICKS_HOST, DATABRICKS_HTTP_PATH, DATABRICKS_JDBC_URL)
+#   3. .mcr-compare.properties in current working directory
+#   4. .mcr-compare.properties in user home directory (~/)
+
+# Option A: Individual connection parameters
+databricks.token=dapi...your-token-here...
+databricks.host=adb-879908127091742.2.azuredatabricks.net
+databricks.http_path=/sql/1.0/warehouses/dad35031bafe9507
+
+# Option B: Full JDBC URL (overrides token/host/http_path above)
+# databricks.jdbc_url=jdbc:databricks://adb-879908127091742.2.azuredatabricks.net:443/default;transportMode=http;ssl=1;AuthMech=3;httpPath=/sql/1.0/warehouses/dad35031bafe9507;UID=token;PWD=dapi...

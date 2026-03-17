@@ -1,6 +1,7 @@
 package com.tomtom.orbis.comparator;
 
 import com.tomtom.orbis.comparator.bev.BevGeopackageReader;
+import com.tomtom.orbis.comparator.config.AppConfig;
 import com.tomtom.orbis.comparator.h3.H3TileResolver;
 import com.tomtom.orbis.comparator.mcr.McrClient;
 import com.tomtom.orbis.comparator.model.AddressPoint;
@@ -20,7 +21,7 @@ import java.nio.file.Path;
 import java.util.List;
 import java.util.concurrent.Callable;
 
-@Command(name = "mcr-compare", version = "1.1.0",
+@Command(name = "mcr-compare", version = "1.2.0",
         description = "Compare MCR (Orbis) address points against an optional ground truth GeoPackage.",
         mixinStandardHelpOptions = true)
 public class App implements Callable<Integer> {
@@ -30,7 +31,7 @@ public class App implements Callable<Integer> {
     private String h3Tile;
 
     @Option(names = {"-g", "--ground-truth"},
-            description = "Path to ground truth GeoPackage file (optional — if omitted, MCR data is exported without comparison)")
+            description = "Path to ground truth GeoPackage file (optional)")
     private Path groundTruthPath;
 
     @Option(names = {"-o", "--output-dir"}, defaultValue = "./output",
@@ -45,17 +46,25 @@ public class App implements Callable<Integer> {
             description = "License zone (e.g. AUT, UKR, DEU)")
     private String licenseZone;
 
-    @Option(names = {"--host"}, defaultValue = "adb-879908127091742.2.azuredatabricks.net",
-            description = "Databricks host")
+    @Option(names = {"--host"},
+            description = "Databricks host (or set in config file / DATABRICKS_HOST env var)")
     private String host;
 
-    @Option(names = {"--http-path"}, defaultValue = "/sql/1.0/warehouses/dad35031bafe9507",
-            description = "Databricks SQL warehouse HTTP path")
+    @Option(names = {"--http-path"},
+            description = "Databricks HTTP path (or set in config file / DATABRICKS_HTTP_PATH env var)")
     private String httpPath;
 
     @Option(names = {"--token"},
-            description = "Databricks PAT (or set DATABRICKS_TOKEN env var)")
+            description = "Databricks PAT (or set in config file / DATABRICKS_TOKEN env var)")
     private String token;
+
+    @Option(names = {"--jdbc-url"},
+            description = "Full JDBC URL (overrides host/http-path/token; or set in config file / DATABRICKS_JDBC_URL env var)")
+    private String jdbcUrl;
+
+    @Option(names = {"-c", "--config"},
+            description = "Path to config file (default: .mcr-compare.properties in cwd or home)")
+    private Path configPath;
 
     @Option(names = {"--gt-layer"},
             description = "GeoPackage layer name (default: first layer)")
@@ -66,16 +75,35 @@ public class App implements Callable<Integer> {
     private String language;
 
     @Option(names = {"--metric-crs"}, defaultValue = "EPSG:3857",
-            description = "Metric CRS for buffer matching (default: EPSG:3857). "
-                    + "Use EPSG:31287 for Austria, EPSG:32637 for Ukraine, etc.")
+            description = "Metric CRS for buffer matching (default: EPSG:3857)")
     private String metricCrs;
 
     @Override
     public Integer call() throws Exception {
-        // Resolve token
-        String dbToken = token != null ? token : System.getenv("DATABRICKS_TOKEN");
-        if (dbToken == null || dbToken.isBlank()) {
-            System.err.println("ERROR: Databricks token required. Use --token or set DATABRICKS_TOKEN env var.");
+        // Load config file
+        AppConfig config = configPath != null ? AppConfig.loadFrom(configPath) : AppConfig.load();
+        if (config.isLoaded()) {
+            System.out.printf("       Config loaded from: %s%n", config.getLoadedFrom());
+        }
+
+        // Resolve credentials: CLI arg > env var > config file
+        String resolvedJdbcUrl = coalesce(jdbcUrl, System.getenv("DATABRICKS_JDBC_URL"), config.getJdbcUrl());
+        String resolvedToken = coalesce(token, System.getenv("DATABRICKS_TOKEN"), config.getToken());
+        String resolvedHost = coalesce(host, System.getenv("DATABRICKS_HOST"), config.getHost());
+        String resolvedHttpPath = coalesce(httpPath, System.getenv("DATABRICKS_HTTP_PATH"), config.getHttpPath());
+
+        // Build JDBC URL
+        String finalJdbcUrl;
+        if (resolvedJdbcUrl != null) {
+            finalJdbcUrl = resolvedJdbcUrl;
+        } else if (resolvedToken != null && resolvedHost != null && resolvedHttpPath != null) {
+            finalJdbcUrl = McrClient.buildJdbcUrl(resolvedHost, resolvedHttpPath, resolvedToken);
+        } else {
+            System.err.println("ERROR: Databricks connection required. Provide one of:");
+            System.err.println("  --jdbc-url          Full JDBC connection string");
+            System.err.println("  --token + --host + --http-path");
+            System.err.println("  Config file (.mcr-compare.properties) with databricks.* keys");
+            System.err.println("  Environment variables: DATABRICKS_TOKEN, DATABRICKS_HOST, DATABRICKS_HTTP_PATH");
             return 1;
         }
 
@@ -92,9 +120,8 @@ public class App implements Callable<Integer> {
 
         // Step 2: Query MCR
         System.out.println("[2/6] Querying MCR address points...");
-        String jdbcUrl = McrClient.buildJdbcUrl(host, httpPath, dbToken);
         List<AddressPoint> mcrPoints;
-        try (McrClient mcr = new McrClient(jdbcUrl)) {
+        try (McrClient mcr = new McrClient(finalJdbcUrl)) {
             mcrPoints = mcr.queryAddressPoints(queryTiles, product, licenseZone, language);
         }
         System.out.printf("       MCR points (wide area): %,d%n", mcrPoints.size());
@@ -118,7 +145,6 @@ public class App implements Callable<Integer> {
                 System.out.println("       Falling back to MCR-only export.");
                 result = buildMcrOnlyResult(mcrPoints, tileBoundary);
             } else {
-                // Step 4: Spatial matching
                 System.out.println("[4/6] Spatial matching (5m buffer)...");
                 SpatialMatcher matcher = new SpatialMatcher();
                 result = matcher.match(gtPoints, mcrPoints, tileBoundary,
@@ -141,9 +167,7 @@ public class App implements Callable<Integer> {
         new GeoParquetWriter().write(result, parquetPath);
         System.out.printf("       -> %s%n", parquetPath);
 
-        // Summary
         new ConsoleSummary().print(result);
-
         return 0;
     }
 
@@ -152,6 +176,13 @@ public class App implements Callable<Integer> {
                 .filter(p -> tileBoundary.contains(p.getGeometry()))
                 .toList();
         return ComparisonResult.mcrOnly(mcrInTile, h3Tile, product, licenseZone);
+    }
+
+    private static String coalesce(String... values) {
+        for (String v : values) {
+            if (v != null && !v.isBlank()) return v;
+        }
+        return null;
     }
 
     public static void main(String[] args) {

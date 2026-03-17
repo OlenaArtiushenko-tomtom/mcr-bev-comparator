@@ -15,6 +15,55 @@ Compare [MCR (Map Central Repository)](https://tomtom.atlassian.net/wiki/spaces/
 mvn clean package -DskipTests
 ```
 
+## Configuration
+
+Credentials and connection details are loaded from (first found wins):
+
+1. **CLI arguments** (`--token`, `--host`, `--http-path`, `--jdbc-url`)
+2. **Environment variables** (`DATABRICKS_TOKEN`, `DATABRICKS_HOST`, `DATABRICKS_HTTP_PATH`, `DATABRICKS_JDBC_URL`)
+3. **Config file** `.mcr-compare.properties` in the current working directory
+4. **Config file** `~/.mcr-compare.properties` in your home directory
+
+### Setup (recommended)
+
+```bash
+# Copy the example config file
+cp .mcr-compare.properties.example .mcr-compare.properties
+
+# Edit with your credentials
+nano .mcr-compare.properties
+```
+
+The config file uses Java properties format:
+
+```properties
+# Option A: Individual parameters
+databricks.token=dapi...your-token-here...
+databricks.host=adb-879908127091742.2.azuredatabricks.net
+databricks.http_path=/sql/1.0/warehouses/dad35031bafe9507
+
+# Option B: Full JDBC URL (overrides the above)
+# databricks.jdbc_url=jdbc:databricks://...
+```
+
+The `.mcr-compare.properties` file is in `.gitignore` — it will never be committed.
+
+You can also point to a specific config file with `-c`:
+
+```bash
+java -jar target/mcr-bev-comparator-1.0-SNAPSHOT.jar \
+  -c /path/to/my-config.properties \
+  -t 871e15b71ffffff -p nexventura_26120.000 -l AUT
+```
+
+### Alternative: Environment variables
+
+```bash
+export DATABRICKS_TOKEN=dapi...
+export DATABRICKS_HOST=adb-879908127091742.2.azuredatabricks.net
+export DATABRICKS_HTTP_PATH=/sql/1.0/warehouses/dad35031bafe9507
+```
+
 ## Usage
 
 ### With ground truth (full comparison)
@@ -26,8 +75,7 @@ java -jar target/mcr-bev-comparator-1.0-SNAPSHOT.jar \
   --product nexventura_26120.000 \
   --license-zone AUT \
   --language de-Latn \
-  --metric-crs EPSG:31287 \
-  --token dapi...
+  --metric-crs EPSG:31287
 ```
 
 ### Without ground truth (MCR export only)
@@ -37,8 +85,7 @@ java -jar target/mcr-bev-comparator-1.0-SNAPSHOT.jar \
   --h3-tile 871e6384affffff \
   --product nexventura_26120.000 \
   --license-zone UKR \
-  --language uk-Cyrl \
-  --token dapi...
+  --language uk-Cyrl
 ```
 
 When no ground truth is provided (or the ground truth has no data for the tile), the tool exports MCR data and reports that ground truth is not available.
@@ -51,13 +98,15 @@ When no ground truth is provided (or the ground truth has no data for the tile),
 | `-p, --product` | Yes | MCR product (e.g. `nexventura_26120.000`) |
 | `-l, --license-zone` | Yes | License zone (e.g. `AUT`, `UKR`, `DEU`) |
 | `-g, --ground-truth` | No | Path to ground truth GeoPackage |
-| `--token` | No | Databricks PAT (or `DATABRICKS_TOKEN` env var) |
+| `-c, --config` | No | Path to config file |
+| `--token` | No | Databricks PAT |
+| `--host` | No | Databricks host |
+| `--http-path` | No | Databricks HTTP path |
+| `--jdbc-url` | No | Full JDBC URL (overrides token/host/http-path) |
 | `--language` | No | Language suffix for address tags (default: `de-Latn`) |
 | `--metric-crs` | No | Metric CRS for buffer matching (default: `EPSG:3857`) |
 | `-o, --output-dir` | No | Output directory (default: `./output`) |
 | `--gt-layer` | No | GeoPackage layer name (default: first layer) |
-| `--host` | No | Databricks host |
-| `--http-path` | No | Databricks SQL warehouse HTTP path |
 
 ### Common language/CRS combinations
 
