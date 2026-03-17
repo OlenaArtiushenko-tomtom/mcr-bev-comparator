@@ -8,7 +8,11 @@ import com.tomtom.orbis.comparator.model.AddressPoint;
 import com.tomtom.orbis.comparator.model.ComparisonResult;
 import com.tomtom.orbis.comparator.output.ConsoleSummary;
 import com.tomtom.orbis.comparator.output.GeoParquetWriter;
+import com.tomtom.orbis.comparator.output.HtmlDashboardGenerator;
 import com.tomtom.orbis.comparator.output.HtmlMapGenerator;
+import com.tomtom.orbis.comparator.quality.CheckContext;
+import com.tomtom.orbis.comparator.quality.QualityPipeline;
+import com.tomtom.orbis.comparator.quality.QualityReport;
 import com.tomtom.orbis.comparator.spatial.SpatialMatcher;
 import com.uber.h3core.util.LatLng;
 import org.locationtech.jts.geom.Polygon;
@@ -21,57 +25,57 @@ import java.nio.file.Path;
 import java.util.List;
 import java.util.concurrent.Callable;
 
-@Command(name = "mcr-compare", version = "1.2.0",
-        description = "Compare MCR (Orbis) address points against an optional ground truth GeoPackage.",
+@Command(name = "mcr-compare", version = "2.0.0",
+        description = "Assess source address data quality and compare against MCR (Orbis).",
         mixinStandardHelpOptions = true)
 public class App implements Callable<Integer> {
+
+    @Option(names = {"-s", "--source"}, required = true,
+            description = "Path to source address data GeoPackage")
+    private Path sourcePath;
 
     @Option(names = {"-t", "--h3-tile"}, required = true,
             description = "H3 tile index (e.g. 871e15b71ffffff)")
     private String h3Tile;
 
-    @Option(names = {"-g", "--ground-truth"},
-            description = "Path to ground truth GeoPackage file (optional)")
-    private Path groundTruthPath;
-
     @Option(names = {"-o", "--output-dir"}, defaultValue = "./output",
             description = "Output directory (default: ./output)")
     private Path outputDir;
 
-    @Option(names = {"-p", "--product"}, required = true,
-            description = "MCR product (e.g. nexventura_26120.000)")
+    @Option(names = {"-p", "--product"},
+            description = "MCR product for coverage check (e.g. nexventura_26120.000). If omitted, MCR check is skipped.")
     private String product;
 
-    @Option(names = {"-l", "--license-zone"}, required = true,
-            description = "License zone (e.g. AUT, UKR, DEU)")
+    @Option(names = {"-l", "--license-zone"},
+            description = "License zone for MCR query (e.g. AUT, UKR)")
     private String licenseZone;
 
     @Option(names = {"--host"},
-            description = "Databricks host (or set in config file / DATABRICKS_HOST env var)")
+            description = "Databricks host")
     private String host;
 
     @Option(names = {"--http-path"},
-            description = "Databricks HTTP path (or set in config file / DATABRICKS_HTTP_PATH env var)")
+            description = "Databricks HTTP path")
     private String httpPath;
 
     @Option(names = {"--token"},
-            description = "Databricks PAT (or set in config file / DATABRICKS_TOKEN env var)")
+            description = "Databricks PAT")
     private String token;
 
     @Option(names = {"--jdbc-url"},
-            description = "Full JDBC URL (overrides host/http-path/token; or set in config file / DATABRICKS_JDBC_URL env var)")
+            description = "Full JDBC URL (overrides host/http-path/token)")
     private String jdbcUrl;
 
     @Option(names = {"-c", "--config"},
-            description = "Path to config file (default: .mcr-compare.properties in cwd or home)")
+            description = "Path to config file")
     private Path configPath;
 
-    @Option(names = {"--gt-layer"},
+    @Option(names = {"--source-layer"},
             description = "GeoPackage layer name (default: first layer)")
-    private String gtLayer;
+    private String sourceLayer;
 
     @Option(names = {"--language"}, defaultValue = "de-Latn",
-            description = "Language tag suffix for address components (default: de-Latn)")
+            description = "Language tag suffix for MCR address components (default: de-Latn)")
     private String language;
 
     @Option(names = {"--metric-crs"}, defaultValue = "EPSG:3857",
@@ -80,102 +84,119 @@ public class App implements Callable<Integer> {
 
     @Override
     public Integer call() throws Exception {
-        // Load config file
-        AppConfig config = configPath != null ? AppConfig.loadFrom(configPath) : AppConfig.load();
-        if (config.isLoaded()) {
-            System.out.printf("       Config loaded from: %s%n", config.getLoadedFrom());
-        }
-
-        // Resolve credentials: CLI arg > env var > config file
-        String resolvedJdbcUrl = coalesce(jdbcUrl, System.getenv("DATABRICKS_JDBC_URL"), config.getJdbcUrl());
-        String resolvedToken = coalesce(token, System.getenv("DATABRICKS_TOKEN"), config.getToken());
-        String resolvedHost = coalesce(host, System.getenv("DATABRICKS_HOST"), config.getHost());
-        String resolvedHttpPath = coalesce(httpPath, System.getenv("DATABRICKS_HTTP_PATH"), config.getHttpPath());
-
-        // Build JDBC URL
-        String finalJdbcUrl;
-        if (resolvedJdbcUrl != null) {
-            finalJdbcUrl = resolvedJdbcUrl;
-        } else if (resolvedToken != null && resolvedHost != null && resolvedHttpPath != null) {
-            finalJdbcUrl = McrClient.buildJdbcUrl(resolvedHost, resolvedHttpPath, resolvedToken);
-        } else {
-            System.err.println("ERROR: Databricks connection required. Provide one of:");
-            System.err.println("  --jdbc-url          Full JDBC connection string");
-            System.err.println("  --token + --host + --http-path");
-            System.err.println("  Config file (.mcr-compare.properties) with databricks.* keys");
-            System.err.println("  Environment variables: DATABRICKS_TOKEN, DATABRICKS_HOST, DATABRICKS_HTTP_PATH");
-            return 1;
-        }
-
         Files.createDirectories(outputDir);
 
-        // Step 1: Resolve H3 tiles
-        System.out.println("[1/6] Resolving H3 tiles...");
+        // Step 1: Resolve H3 tile
+        System.out.println("[1/5] Resolving H3 tiles...");
         H3TileResolver h3Resolver = new H3TileResolver();
         List<String> queryTiles = h3Resolver.getQueryTiles(h3Tile);
         Polygon tileBoundary = h3Resolver.getTileBoundary(h3Tile);
         LatLng center = h3Resolver.getTileCenter(h3Tile);
-        System.out.printf("       Center tile: %s (res %d) + %d neighbors%n",
+        System.out.printf("       Tile: %s (res %d) + %d neighbors%n",
                 h3Tile, h3Resolver.getResolution(h3Tile), queryTiles.size() - 1);
 
-        // Step 2: Query MCR
-        System.out.println("[2/6] Querying MCR address points...");
-        List<AddressPoint> mcrPoints;
-        try (McrClient mcr = new McrClient(finalJdbcUrl)) {
-            mcrPoints = mcr.queryAddressPoints(queryTiles, product, licenseZone, language);
-        }
-        System.out.printf("       MCR points (wide area): %,d%n", mcrPoints.size());
+        // Step 2: Read source data
+        System.out.println("[2/5] Reading source GeoPackage...");
+        BevGeopackageReader reader = new BevGeopackageReader();
+        List<AddressPoint> sourcePoints = reader.readAddressPoints(sourcePath, tileBoundary, sourceLayer);
+        System.out.printf("       Source points in tile: %,d%n", sourcePoints.size());
 
-        if (mcrPoints.isEmpty()) {
-            System.out.println("       No MCR address points found. Check product, license zone, and H3 tile.");
+        if (sourcePoints.isEmpty()) {
+            System.out.println("       No source data found in this tile.");
             return 1;
         }
 
-        ComparisonResult result;
+        // Step 3: Optionally query MCR for coverage check
+        List<AddressPoint> mcrPoints = List.of();
+        ComparisonResult mcrComparison = null;
+        boolean mcrAvailable = false;
 
-        // Step 3: Read ground truth (if provided)
-        if (groundTruthPath != null) {
-            System.out.println("[3/6] Reading ground truth GeoPackage...");
-            BevGeopackageReader gtReader = new BevGeopackageReader();
-            List<AddressPoint> gtPoints = gtReader.readAddressPoints(groundTruthPath, tileBoundary, gtLayer);
-            System.out.printf("       Ground truth points in tile: %,d%n", gtPoints.size());
+        if (product != null && licenseZone != null) {
+            String finalJdbcUrl = resolveJdbcUrl();
+            if (finalJdbcUrl != null) {
+                System.out.println("[3/5] Querying MCR for coverage check...");
+                try (McrClient mcr = new McrClient(finalJdbcUrl)) {
+                    mcrPoints = mcr.queryAddressPoints(queryTiles, product, licenseZone, language);
+                }
+                System.out.printf("       MCR points (wide area): %,d%n", mcrPoints.size());
 
-            if (gtPoints.isEmpty()) {
-                System.out.println("       Ground truth has no data for this tile.");
-                System.out.println("       Falling back to MCR-only export.");
-                result = buildMcrOnlyResult(mcrPoints, tileBoundary);
+                if (!mcrPoints.isEmpty()) {
+                    mcrAvailable = true;
+                    SpatialMatcher matcher = new SpatialMatcher();
+                    mcrComparison = matcher.match(sourcePoints, mcrPoints, tileBoundary,
+                            h3Tile, product, licenseZone, metricCrs);
+                }
             } else {
-                System.out.println("[4/6] Spatial matching (5m buffer)...");
-                SpatialMatcher matcher = new SpatialMatcher();
-                result = matcher.match(gtPoints, mcrPoints, tileBoundary,
-                        h3Tile, product, licenseZone, metricCrs);
+                System.out.println("[3/5] No Databricks credentials — skipping MCR coverage check.");
             }
         } else {
-            System.out.println("[3/6] No ground truth provided — MCR-only export.");
-            result = buildMcrOnlyResult(mcrPoints, tileBoundary);
+            System.out.println("[3/5] No --product/--license-zone — skipping MCR coverage check.");
         }
 
-        // Step 5: Generate HTML
-        System.out.println("[5/6] Generating HTML map...");
-        Path htmlPath = outputDir.resolve("comparison_" + h3Tile + ".html");
-        new HtmlMapGenerator().generate(result, tileBoundary, center.lat, center.lng, htmlPath);
-        System.out.printf("       -> %s%n", htmlPath);
+        // Step 4: Run quality pipeline
+        System.out.println("[4/5] Running quality checks...");
+        CheckContext context = new CheckContext(tileBoundary, h3Tile, metricCrs, mcrPoints, mcrComparison);
+        QualityPipeline pipeline = new QualityPipeline(mcrAvailable);
+        String sourceName = sourcePath.getFileName().toString();
+        QualityReport report = pipeline.run(sourcePoints, context, h3Tile, sourceName);
 
-        // Step 6: Write GeoParquet
-        System.out.println("[6/6] Writing GeoParquet...");
-        Path parquetPath = outputDir.resolve("comparison_" + h3Tile + ".parquet");
-        new GeoParquetWriter().write(result, parquetPath);
-        System.out.printf("       -> %s%n", parquetPath);
+        // Step 5: Generate outputs
+        System.out.println("[5/5] Generating outputs...");
 
-        new ConsoleSummary().print(result);
+        Path dashPath = outputDir.resolve("quality_" + h3Tile + ".html");
+        new HtmlDashboardGenerator().generate(report, tileBoundary, center.lat, center.lng, dashPath);
+        System.out.printf("       Dashboard -> %s%n", dashPath);
+
+        Path parquetPath = outputDir.resolve("quality_" + h3Tile + ".parquet");
+        new GeoParquetWriter().writeQualityReport(report, parquetPath);
+        System.out.printf("       GeoParquet -> %s%n", parquetPath);
+
+        // Console summary
+        printQualitySummary(report);
+
         return 0;
     }
 
-    private ComparisonResult buildMcrOnlyResult(List<AddressPoint> mcrPoints, Polygon tileBoundary) {
-        List<AddressPoint> mcrInTile = mcrPoints.stream()
-                .filter(p -> tileBoundary.contains(p.getGeometry()))
-                .toList();
-        return ComparisonResult.mcrOnly(mcrInTile, h3Tile, product, licenseZone);
+    private String resolveJdbcUrl() throws Exception {
+        AppConfig config = configPath != null ? AppConfig.loadFrom(configPath) : AppConfig.load();
+        if (config.isLoaded()) {
+            System.out.printf("       Config: %s%n", config.getLoadedFrom());
+        }
+
+        String url = coalesce(jdbcUrl, System.getenv("DATABRICKS_JDBC_URL"), config.getJdbcUrl());
+        if (url != null) return url;
+
+        String t = coalesce(token, System.getenv("DATABRICKS_TOKEN"), config.getToken());
+        String h = coalesce(host, System.getenv("DATABRICKS_HOST"), config.getHost());
+        String p = coalesce(httpPath, System.getenv("DATABRICKS_HTTP_PATH"), config.getHttpPath());
+
+        if (t != null && h != null && p != null) {
+            return McrClient.buildJdbcUrl(h, p, t);
+        }
+        return null;
+    }
+
+    private void printQualitySummary(QualityReport report) {
+        System.out.println();
+        System.out.println("=".repeat(60));
+        System.out.printf("  Source Data Quality Report  [%s]  %.1f/100%n",
+                report.getScoreGrade(), report.getOverallScore());
+        System.out.println("=".repeat(60));
+        System.out.printf("  Source: %s%n", report.getSourceName());
+        System.out.printf("  H3 Tile: %s%n", report.getH3Tile());
+        System.out.printf("  Records: %,d (clean: %,d, flagged: %,d)%n",
+                report.getTotalRecords(), report.cleanRecordCount(), report.flaggedRecordCount());
+        System.out.println("-".repeat(60));
+        for (var dim : report.getDimensions()) {
+            if (dim.weight() <= 0) continue;
+            System.out.printf("  %-20s %5.1f  (%d issues)%n",
+                    dim.dimension(), dim.score(), dim.anomalies().size());
+        }
+        System.out.println("-".repeat(60));
+        System.out.printf("  Anomalies: %d critical, %d warnings, %d info%n",
+                report.criticalCount(), report.warningCount(), report.infoCount());
+        System.out.println("=".repeat(60));
+        System.out.println();
     }
 
     private static String coalesce(String... values) {

@@ -3,6 +3,9 @@ package com.tomtom.orbis.comparator.output;
 import com.tomtom.orbis.comparator.model.AddressPoint;
 import com.tomtom.orbis.comparator.model.ComparisonResult;
 import com.tomtom.orbis.comparator.model.ComparisonResult.MatchPair;
+import com.tomtom.orbis.comparator.quality.FlaggedPoint;
+import com.tomtom.orbis.comparator.quality.QualityReport;
+import com.tomtom.orbis.comparator.quality.Severity;
 import org.apache.avro.Schema;
 import org.apache.avro.SchemaBuilder;
 import org.apache.avro.generic.GenericData;
@@ -186,5 +189,58 @@ public class GeoParquetWriter {
         r.put("location_provenance", p.getLocationProvenance());
         r.put("match_distance_m", matchDist);
         return r;
+    }
+
+    /** Write quality report with per-record flags to GeoParquet. */
+    public void writeQualityReport(QualityReport report, Path outputPath) throws IOException {
+        Schema schema = SchemaBuilder.record("QualityFlaggedPoint")
+                .namespace("com.tomtom.orbis.comparator")
+                .fields()
+                .requiredBytes("geometry")
+                .requiredDouble("longitude")
+                .requiredDouble("latitude")
+                .optionalString("id")
+                .optionalString("street")
+                .optionalString("house_number")
+                .optionalString("postcode")
+                .optionalString("city")
+                .optionalString("suburb")
+                .optionalString("source")
+                .optionalString("quality_flags")
+                .optionalString("worst_severity")
+                .endRecord();
+
+        WKBWriter wkbWriter = new WKBWriter();
+        org.apache.hadoop.fs.Path hadoopPath = new org.apache.hadoop.fs.Path(outputPath.toString());
+
+        Configuration conf = new Configuration();
+        conf.setBoolean("parquet.avro.write-old-list-structure", false);
+
+        try (ParquetWriter<GenericRecord> writer = AvroParquetWriter.<GenericRecord>builder(hadoopPath)
+                .withSchema(schema)
+                .withConf(conf)
+                .withCompressionCodec(CompressionCodecName.SNAPPY)
+                .withExtraMetaData(Map.of("geo", GEO_METADATA))
+                .build()) {
+
+            for (FlaggedPoint fp : report.getFlaggedPoints()) {
+                AddressPoint p = fp.getPoint();
+                GenericRecord r = new GenericData.Record(schema);
+                r.put("geometry", ByteBuffer.wrap(wkbWriter.write(p.getGeometry())));
+                r.put("longitude", p.getGeometry().getX());
+                r.put("latitude", p.getGeometry().getY());
+                r.put("id", p.getId());
+                r.put("street", p.getStreet());
+                r.put("house_number", p.getHouseNumber());
+                r.put("postcode", p.getPostcode());
+                r.put("city", p.getCity());
+                r.put("suburb", p.getSuburb());
+                r.put("source", p.getSource());
+                r.put("quality_flags", fp.getFlagsString());
+                Severity sev = fp.getWorstSeverity();
+                r.put("worst_severity", sev != null ? sev.name() : "CLEAN");
+                writer.write(r);
+            }
+        }
     }
 }

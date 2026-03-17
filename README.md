@@ -1,13 +1,20 @@
-# MCR Address Point Comparator
+# MCR Source Data Quality Assessor
 
-Compare [MCR (Map Central Repository)](https://tomtom.atlassian.net/wiki/spaces/MANA/pages/151013262) address points against an optional ground truth GeoPackage for any location worldwide.
+Automatically assess the quality of incoming geocoding source data. Runs structured quality checks, produces a scored report, highlights anomalies and peculiarities, and optionally compares against [MCR (Map Central Repository)](https://tomtom.atlassian.net/wiki/spaces/MANA/pages/151013262).
+
+## Problem
+
+Geocoding teams rely on local address sources with local peculiarities. There is no automatic way to assess source data quality — checks are manual, inconsistent, miss anomalies, and make supplier comparison difficult.
+
+## Solution
+
+A CLI tool that ingests source data (GeoPackage), runs 6 automated quality dimensions, scores overall quality (0-100 with A-F grade), flags per-record anomalies, and presents results in an interactive dashboard.
 
 ## Prerequisites
 
 - Java 17+
 - Maven 3.8+
-- VPN connected (GlobalProtect) for MCR access
-- Databricks Personal Access Token (PAT)
+- VPN (GlobalProtect) if using MCR coverage check
 
 ## Build
 
@@ -17,98 +24,56 @@ mvn clean package -DskipTests
 
 ## Configuration
 
-Credentials and connection details are loaded from (first found wins):
-
-1. **CLI arguments** (`--token`, `--host`, `--http-path`, `--jdbc-url`)
-2. **Environment variables** (`DATABRICKS_TOKEN`, `DATABRICKS_HOST`, `DATABRICKS_HTTP_PATH`, `DATABRICKS_JDBC_URL`)
-3. **Config file** `.mcr-compare.properties` in the current working directory
-4. **Config file** `~/.mcr-compare.properties` in your home directory
-
-### Setup (recommended)
-
-```bash
-# Copy the example config file
-cp .mcr-compare.properties.example .mcr-compare.properties
-
-# Edit with your credentials
-nano .mcr-compare.properties
-```
-
-The config file uses Java properties format:
-
-```properties
-# Option A: Individual parameters
-databricks.token=dapi...your-token-here...
-databricks.host=adb-879908127091742.2.azuredatabricks.net
-databricks.http_path=/sql/1.0/warehouses/dad35031bafe9507
-
-# Option B: Full JDBC URL (overrides the above)
-# databricks.jdbc_url=jdbc:databricks://...
-```
-
-The `.mcr-compare.properties` file is in `.gitignore` — it will never be committed.
-
-You can also point to a specific config file with `-c`:
-
-```bash
-java -jar target/mcr-bev-comparator-1.0-SNAPSHOT.jar \
-  -c /path/to/my-config.properties \
-  -t 871e15b71ffffff -p nexventura_26120.000 -l AUT
-```
-
-### Alternative: Environment variables
-
-```bash
-export DATABRICKS_TOKEN=dapi...
-export DATABRICKS_HOST=adb-879908127091742.2.azuredatabricks.net
-export DATABRICKS_HTTP_PATH=/sql/1.0/warehouses/dad35031bafe9507
-```
+See `.mcr-compare.properties.example`. Credentials load from (first found wins):
+1. CLI arguments
+2. Environment variables (`DATABRICKS_TOKEN`, `DATABRICKS_HOST`, `DATABRICKS_HTTP_PATH`)
+3. `.mcr-compare.properties` in cwd or `~/`
 
 ## Usage
 
-### With ground truth (full comparison)
+### Source data quality check (no MCR needed)
 
 ```bash
 java -jar target/mcr-bev-comparator-1.0-SNAPSHOT.jar \
+  --source addresses.gpkg \
+  --h3-tile 871e15b71ffffff
+```
+
+Runs completeness, format, duplicate, spatial, and structural checks. No Databricks credentials needed.
+
+### With MCR coverage check
+
+```bash
+java -jar target/mcr-bev-comparator-1.0-SNAPSHOT.jar \
+  --source addresses.gpkg \
   --h3-tile 871e15b71ffffff \
-  --ground-truth C:/path/to/addresses.gpkg \
   --product nexventura_26120.000 \
   --license-zone AUT \
   --language de-Latn \
   --metric-crs EPSG:31287
 ```
 
-### Without ground truth (MCR export only)
-
-```bash
-java -jar target/mcr-bev-comparator-1.0-SNAPSHOT.jar \
-  --h3-tile 871e6384affffff \
-  --product nexventura_26120.000 \
-  --license-zone UKR \
-  --language uk-Cyrl
-```
-
-When no ground truth is provided (or the ground truth has no data for the tile), the tool exports MCR data and reports that ground truth is not available.
+Adds MCR coverage dimension: match rate, positional accuracy, missing/extra addresses.
 
 ### Options
 
 | Flag | Required | Description |
 |------|----------|-------------|
-| `-t, --h3-tile` | Yes | H3 tile index (e.g. `871e15b71ffffff`) |
-| `-p, --product` | Yes | MCR product (e.g. `nexventura_26120.000`) |
-| `-l, --license-zone` | Yes | License zone (e.g. `AUT`, `UKR`, `DEU`) |
-| `-g, --ground-truth` | No | Path to ground truth GeoPackage |
+| `-s, --source` | Yes | Path to source GeoPackage |
+| `-t, --h3-tile` | Yes | H3 tile index |
+| `-p, --product` | No | MCR product (enables coverage check) |
+| `-l, --license-zone` | No | License zone for MCR query |
+| `--language` | No | Language suffix (default: `de-Latn`) |
+| `--metric-crs` | No | Metric CRS for matching (default: `EPSG:3857`) |
 | `-c, --config` | No | Path to config file |
 | `--token` | No | Databricks PAT |
 | `--host` | No | Databricks host |
 | `--http-path` | No | Databricks HTTP path |
-| `--jdbc-url` | No | Full JDBC URL (overrides token/host/http-path) |
-| `--language` | No | Language suffix for address tags (default: `de-Latn`) |
-| `--metric-crs` | No | Metric CRS for buffer matching (default: `EPSG:3857`) |
+| `--jdbc-url` | No | Full JDBC URL |
 | `-o, --output-dir` | No | Output directory (default: `./output`) |
-| `--gt-layer` | No | GeoPackage layer name (default: first layer) |
+| `--source-layer` | No | GeoPackage layer name |
 
-### Common language/CRS combinations
+### Common configurations
 
 | Country | License Zone | Language | Metric CRS |
 |---------|-------------|----------|------------|
@@ -118,49 +83,55 @@ When no ground truth is provided (or the ground truth has no data for the tile),
 | France | FRA | fr-Latn | EPSG:2154 |
 | Netherlands | NLD | nl-Latn | EPSG:28992 |
 
+## Quality Dimensions
+
+| Dimension | Weight | Checks |
+|-----------|--------|--------|
+| **Completeness** | 25 | Null rate for street, housenumber, postcode, city |
+| **Format** | 15 | Housenumber patterns, postcode format per country, encoding issues (mojibake) |
+| **Duplicates** | 15 | Exact coordinate duplicates, same address at different locations (>50m) |
+| **Spatial** | 20 | Points outside H3 tile, density outliers (H3 res-9 cells), isolated points |
+| **MCR Coverage** | 15 | Match rate (5m buffer), positional accuracy, missing/extra vs MCR |
+| **Structural** | 10 | Single-address streets, unusual names, postcode distribution skew |
+
+**Scoring:** `overallScore = weightedAverage(dimensionScores)`. Grade: A (95+), B (85+), C (70+), D (50+), F (<50).
+
+MCR Coverage is skipped when `--product` / `--license-zone` are not provided.
+
 ## Output
 
 | File | Description |
 |------|-------------|
-| `comparison_<tile>.html` | Interactive Leaflet map |
-| `comparison_<tile>.parquet` | GeoParquet file (open in QGIS) |
+| `quality_<tile>.html` | Interactive dashboard: score gauge, dimension cards, map, anomaly table |
+| `quality_<tile>.parquet` | GeoParquet with `quality_flags` and `worst_severity` per record |
 
-### HTML Map
+### Dashboard
 
-**With ground truth:**
-- **Blue markers**: Ground truth addresses missing from MCR (false negatives)
-- **Red markers**: MCR addresses not in ground truth (false positives)
-- Stats panel shows recall, precision, F1
-
-**Without ground truth:**
-- **Green markers**: All MCR address points in the tile
-- Stats panel shows point count and "ground truth not available"
+- **Score header**: Overall grade (A-F) with score
+- **Summary**: Clean vs flagged record counts, anomaly counts by severity
+- **Dimension cards**: Individual scores with progress bars
+- **Map**: Points colored by severity (green=clean, orange=warning, red=critical)
+- **Anomaly table**: All issues with severity, dimension, code, message
+- **Details**: Per-dimension statistics
 
 ### GeoParquet in QGIS
 
-1. Open QGIS
-2. Layer > Add Layer > Add Vector Layer
-3. Select the `.parquet` file
-4. Style by `match_status` field: `matched`, `gt_only`, `mcr_only`, or `mcr`
+1. Open QGIS > Layer > Add Vector Layer > select `.parquet`
+2. Style by `worst_severity`: `CLEAN` (green), `INFO` (blue), `WARNING` (orange), `CRITICAL` (red)
+3. Filter by `quality_flags` to investigate specific issues
 
-## How it works
+### Per-record quality flags
 
-1. Resolves H3 tile + 6 neighbors (`gridDisk(k=1)`) to avoid border artifacts
-2. Queries MCR for Orbis `address_point` features (`building`, `land_parcel`, `map_location`, `sub_address`)
-3. If ground truth provided: reads GeoPackage, clips to H3 tile boundary
-4. If ground truth has data: reprojects to metric CRS for 5m buffer matching using JTS STRtree
-5. Reports recall/precision/F1, or "ground truth not available"
-6. Outputs HTML map + GeoParquet
+`MISSING_STREET`, `MISSING_HOUSENUMBER`, `MISSING_POSTCODE`, `MISSING_CITY`,
+`INVALID_HOUSENUMBER_FORMAT`, `INVALID_POSTCODE_FORMAT`, `ENCODING_ISSUE`,
+`DUPLICATE_COORDINATE`, `DUPLICATE_ADDRESS_TEXT`,
+`OUTSIDE_TILE`, `DENSITY_OUTLIER_HIGH`, `ISOLATED_POINT`,
+`MCR_UNMATCHED`, `SINGLE_ADDRESS_STREET`, `UNUSUAL_STREET_NAME`
 
-## Address Point Definition
+## Supplier comparison
 
-Per [Orbis spec](https://specs.tomtomgroup.com/orbis/documentation/platform/daily/specifications/feature_model/feature/address_point.html):
-an address point is a Node with tag `address_point` set to one of: `building`, `land_parcel`, `map_location`, `sub_address`.
-
-### Orbis Address Components
-
-All 30 [address components](https://specs.tomtomgroup.com/orbis/documentation/platform/daily/specifications/feature_model/namespace/address_component.html) are extracted from MCR tags:
-
-`block`, `building`, `buildingcomplex`, `buildingsection`, `city`, `conscriptionnumber`, `county`, `distance`, `district`, `door`, `floor`, `geographiccode`, `housename`, `housenumber`, `landmark:direction`, `landmark:nearby`, `locationcode`, `neighbourhood`, `place`, `postcode`, `province`, `state`, `street`, `street:dependent`, `street:number`, `streetnumber`, `subaddressarea`, `suburb`, `townland`, `unit`
-
-Plus metadata: `parsed:addr:street`, `osm_identifier`, `layer_id`, `license`, `license_zone`, `supported`, `location_provenance`.
+Run the tool on each supplier's data for the same H3 tile. Compare:
+- Overall scores and grades
+- Dimension breakdowns (which supplier has better completeness? fewer duplicates?)
+- Anomaly counts and types
+- GeoParquet side-by-side in QGIS

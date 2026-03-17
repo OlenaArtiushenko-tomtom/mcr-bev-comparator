@@ -50,8 +50,8 @@ public class BevGeopackageReader {
                     if (!tileBoundary.contains(pt)) continue;
 
                     points.add(AddressPoint.builder()
-                            .id("bev_" + (id++))
-                            .source("bev")
+                            .id("src_" + (id++))
+                            .source("source")
                             .geometry(pt)
                             .addressPointType("building")
                             .street(getAttr(f, "strassenname"))
