@@ -20,8 +20,8 @@ import java.nio.file.Path;
 import java.util.List;
 import java.util.concurrent.Callable;
 
-@Command(name = "mcr-bev-compare", version = "1.0.0",
-        description = "Compare MCR (Orbis) address points against BEV GeoPackage ground truth.",
+@Command(name = "mcr-compare", version = "1.1.0",
+        description = "Compare MCR (Orbis) address points against an optional ground truth GeoPackage.",
         mixinStandardHelpOptions = true)
 public class App implements Callable<Integer> {
 
@@ -29,9 +29,9 @@ public class App implements Callable<Integer> {
             description = "H3 tile index (e.g. 871e15b71ffffff)")
     private String h3Tile;
 
-    @Option(names = {"-b", "--bev-gpkg"}, required = true,
-            description = "Path to BEV GeoPackage file")
-    private Path bevPath;
+    @Option(names = {"-g", "--ground-truth"},
+            description = "Path to ground truth GeoPackage file (optional — if omitted, MCR data is exported without comparison)")
+    private Path groundTruthPath;
 
     @Option(names = {"-o", "--output-dir"}, defaultValue = "./output",
             description = "Output directory (default: ./output)")
@@ -42,7 +42,7 @@ public class App implements Callable<Integer> {
     private String product;
 
     @Option(names = {"-l", "--license-zone"}, required = true,
-            description = "License zone (e.g. AUT)")
+            description = "License zone (e.g. AUT, UKR, DEU)")
     private String licenseZone;
 
     @Option(names = {"--host"}, defaultValue = "adb-879908127091742.2.azuredatabricks.net",
@@ -50,20 +50,25 @@ public class App implements Callable<Integer> {
     private String host;
 
     @Option(names = {"--http-path"}, defaultValue = "/sql/1.0/warehouses/dad35031bafe9507",
-            description = "Databricks HTTP path")
+            description = "Databricks SQL warehouse HTTP path")
     private String httpPath;
 
     @Option(names = {"--token"},
             description = "Databricks PAT (or set DATABRICKS_TOKEN env var)")
     private String token;
 
-    @Option(names = {"--bev-layer"},
+    @Option(names = {"--gt-layer"},
             description = "GeoPackage layer name (default: first layer)")
-    private String bevLayer;
+    private String gtLayer;
 
     @Option(names = {"--language"}, defaultValue = "de-Latn",
             description = "Language tag suffix for address components (default: de-Latn)")
     private String language;
+
+    @Option(names = {"--metric-crs"}, defaultValue = "EPSG:3857",
+            description = "Metric CRS for buffer matching (default: EPSG:3857). "
+                    + "Use EPSG:31287 for Austria, EPSG:32637 for Ukraine, etc.")
+    private String metricCrs;
 
     @Override
     public Integer call() throws Exception {
@@ -74,7 +79,6 @@ public class App implements Callable<Integer> {
             return 1;
         }
 
-        // Create output dir
         Files.createDirectories(outputDir);
 
         // Step 1: Resolve H3 tiles
@@ -95,24 +99,43 @@ public class App implements Callable<Integer> {
         }
         System.out.printf("       MCR points (wide area): %,d%n", mcrPoints.size());
 
-        // Step 3: Read BEV
-        System.out.println("[3/6] Reading BEV GeoPackage...");
-        BevGeopackageReader bevReader = new BevGeopackageReader();
-        List<AddressPoint> bevPoints = bevReader.readAddressPoints(bevPath, tileBoundary, bevLayer);
-        System.out.printf("       BEV points in tile: %,d%n", bevPoints.size());
+        if (mcrPoints.isEmpty()) {
+            System.out.println("       No MCR address points found. Check product, license zone, and H3 tile.");
+            return 1;
+        }
 
-        // Step 4: Spatial matching
-        System.out.println("[4/6] Spatial matching (5m buffer)...");
-        SpatialMatcher matcher = new SpatialMatcher();
-        ComparisonResult result = matcher.match(bevPoints, mcrPoints, tileBoundary,
-                h3Tile, product, licenseZone);
+        ComparisonResult result;
 
-        // Step 5: Generate outputs
+        // Step 3: Read ground truth (if provided)
+        if (groundTruthPath != null) {
+            System.out.println("[3/6] Reading ground truth GeoPackage...");
+            BevGeopackageReader gtReader = new BevGeopackageReader();
+            List<AddressPoint> gtPoints = gtReader.readAddressPoints(groundTruthPath, tileBoundary, gtLayer);
+            System.out.printf("       Ground truth points in tile: %,d%n", gtPoints.size());
+
+            if (gtPoints.isEmpty()) {
+                System.out.println("       Ground truth has no data for this tile.");
+                System.out.println("       Falling back to MCR-only export.");
+                result = buildMcrOnlyResult(mcrPoints, tileBoundary);
+            } else {
+                // Step 4: Spatial matching
+                System.out.println("[4/6] Spatial matching (5m buffer)...");
+                SpatialMatcher matcher = new SpatialMatcher();
+                result = matcher.match(gtPoints, mcrPoints, tileBoundary,
+                        h3Tile, product, licenseZone, metricCrs);
+            }
+        } else {
+            System.out.println("[3/6] No ground truth provided — MCR-only export.");
+            result = buildMcrOnlyResult(mcrPoints, tileBoundary);
+        }
+
+        // Step 5: Generate HTML
         System.out.println("[5/6] Generating HTML map...");
         Path htmlPath = outputDir.resolve("comparison_" + h3Tile + ".html");
         new HtmlMapGenerator().generate(result, tileBoundary, center.lat, center.lng, htmlPath);
         System.out.printf("       -> %s%n", htmlPath);
 
+        // Step 6: Write GeoParquet
         System.out.println("[6/6] Writing GeoParquet...");
         Path parquetPath = outputDir.resolve("comparison_" + h3Tile + ".parquet");
         new GeoParquetWriter().write(result, parquetPath);
@@ -122,6 +145,13 @@ public class App implements Callable<Integer> {
         new ConsoleSummary().print(result);
 
         return 0;
+    }
+
+    private ComparisonResult buildMcrOnlyResult(List<AddressPoint> mcrPoints, Polygon tileBoundary) {
+        List<AddressPoint> mcrInTile = mcrPoints.stream()
+                .filter(p -> tileBoundary.contains(p.getGeometry()))
+                .toList();
+        return ComparisonResult.mcrOnly(mcrInTile, h3Tile, product, licenseZone);
     }
 
     public static void main(String[] args) {

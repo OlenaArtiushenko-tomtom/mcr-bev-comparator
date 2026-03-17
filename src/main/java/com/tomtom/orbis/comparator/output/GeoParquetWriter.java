@@ -121,14 +121,20 @@ public class GeoParquetWriter {
                 .withExtraMetaData(Map.of("geo", GEO_METADATA))
                 .build()) {
 
-            for (MatchPair m : result.getMatched()) {
-                writer.write(buildRecord(schema, wkbWriter, "matched", m.bev(), m.getDistanceMeters()));
-            }
-            for (AddressPoint p : result.getBevOnly()) {
-                writer.write(buildRecord(schema, wkbWriter, "bev_only", p, null));
-            }
-            for (AddressPoint p : result.getMcrOnly()) {
-                writer.write(buildRecord(schema, wkbWriter, "mcr_only", p, null));
+            if (result.isGroundTruthAvailable()) {
+                for (MatchPair m : result.getMatched()) {
+                    writer.write(buildRecord(schema, wkbWriter, "matched", m.groundTruth(), m.getDistanceMeters()));
+                }
+                for (AddressPoint p : result.getGroundTruthOnly()) {
+                    writer.write(buildRecord(schema, wkbWriter, "gt_only", p, null));
+                }
+                for (AddressPoint p : result.getMcrOnly()) {
+                    writer.write(buildRecord(schema, wkbWriter, "mcr_only", p, null));
+                }
+            } else {
+                for (AddressPoint p : result.getMcrInTile()) {
+                    writer.write(buildRecord(schema, wkbWriter, "mcr", p, null));
+                }
             }
         }
     }

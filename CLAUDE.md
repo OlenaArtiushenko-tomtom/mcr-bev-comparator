@@ -1,7 +1,11 @@
-# MCR-BEV Comparator
+# MCR Address Point Comparator
 
 ## What this project does
-Java CLI tool that compares MCR (Map Central Repository / Orbis) address points against a BEV GeoPackage ground truth file for a given H3 tile. Outputs an HTML map (Leaflet.js) and GeoParquet file (QGIS-compatible).
+Java CLI tool that compares MCR (Map Central Repository / Orbis) address points against an optional ground truth GeoPackage for a given H3 tile. Works for any location worldwide. Outputs an HTML map (Leaflet.js) and GeoParquet file (QGIS-compatible).
+
+**Two modes:**
+- **With ground truth**: full comparison with recall/precision/F1 metrics
+- **Without ground truth**: exports MCR address points with a message that ground truth is not available
 
 ## Address Point Definition (Orbis spec)
 An address point is a Node with tag `address_point` set to one of:
@@ -63,31 +67,59 @@ All 30 component types extracted from MCR tags (`addr:{component}:{language}`):
 ## Key technical details
 - **MCR catalog**: `pu_orbis_platform_prod_catalog.map_central_repository.points`
 - **H3 border fix**: queries center tile + `gridDisk(k=1)` neighbors
-- **5m buffer matching**: reprojects to EPSG:31287 (MGI Austria Lambert)
+- **5m buffer matching**: reprojects to configurable metric CRS (default EPSG:3857)
 - **Language**: configurable via `--language` (default: `de-Latn`)
 - **GeoParquet**: WKB-encoded geometry with GeoParquet 1.1.0 metadata
+- **Location independent**: works for any H3 tile / license zone / language
 
 ## Build & run
 ```bash
 mvn clean package -DskipTests
+```
+
+### With ground truth (full comparison)
+```bash
 java -jar target/mcr-bev-comparator-1.0-SNAPSHOT.jar \
   --h3-tile 871e15b71ffffff \
-  --bev-gpkg /path/to/bev.gpkg \
+  --ground-truth /path/to/addresses.gpkg \
   --product nexventura_26120.000 \
   --license-zone AUT \
+  --language de-Latn \
+  --metric-crs EPSG:31287 \
   --token <DATABRICKS_PAT>
 ```
 
+### Without ground truth (MCR export only)
+```bash
+java -jar target/mcr-bev-comparator-1.0-SNAPSHOT.jar \
+  --h3-tile 871e6384affffff \
+  --product nexventura_26120.000 \
+  --license-zone UKR \
+  --language uk-Cyrl \
+  --token <DATABRICKS_PAT>
+```
+
+## Common language/CRS combinations
+| Country | License Zone | Language | Metric CRS |
+|---------|-------------|----------|------------|
+| Austria | AUT | de-Latn | EPSG:31287 |
+| Germany | DEU | de-Latn | EPSG:25832 |
+| Ukraine | UKR | uk-Cyrl | EPSG:32637 |
+| France | FRA | fr-Latn | EPSG:2154 |
+| Netherlands | NLD | nl-Latn | EPSG:28992 |
+| Italy | ITA | it-Latn | EPSG:32632 |
+
 ## Project structure
-- `App.java` — CLI entry point (picocli)
-- `mcr/McrClient.java` — Databricks JDBC, extracts all 30 address components from tags
-- `bev/BevGeopackageReader.java` — GeoPackage reader (GeoTools)
+- `App.java` — CLI entry point (picocli), orchestrates both modes
+- `mcr/McrClient.java` — Databricks JDBC, extracts all 30 address components
+- `bev/BevGeopackageReader.java` — GeoPackage reader (GeoTools), any ground truth
 - `h3/H3TileResolver.java` — H3 tile boundary + neighbor resolution
-- `spatial/SpatialMatcher.java` — STRtree-indexed 5m buffer matching
-- `output/HtmlMapGenerator.java` — Leaflet.js interactive map
+- `spatial/SpatialMatcher.java` — STRtree-indexed 5m buffer matching, configurable CRS
+- `output/HtmlMapGenerator.java` — Leaflet.js map (comparison or MCR-only mode)
 - `output/GeoParquetWriter.java` — GeoParquet with all address attributes
-- `output/ConsoleSummary.java` — Console recall/precision/F1
+- `output/ConsoleSummary.java` — Console stats (comparison or MCR-only mode)
 - `model/AddressPoint.java` — Full Orbis address model with builder
+- `model/ComparisonResult.java` — Supports both comparison and MCR-only modes
 
 ## Orbis spec references
 - Address point: https://specs.tomtomgroup.com/orbis/documentation/platform/daily/specifications/feature_model/feature/address_point.html
