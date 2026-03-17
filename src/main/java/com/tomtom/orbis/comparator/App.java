@@ -61,6 +61,10 @@ public class App implements Callable<Integer> {
             description = "GeoPackage layer name (default: first layer)")
     private String bevLayer;
 
+    @Option(names = {"--language"}, defaultValue = "de-Latn",
+            description = "Language tag suffix for address components (default: de-Latn)")
+    private String language;
+
     @Override
     public Integer call() throws Exception {
         // Resolve token
@@ -87,7 +91,7 @@ public class App implements Callable<Integer> {
         String jdbcUrl = McrClient.buildJdbcUrl(host, httpPath, dbToken);
         List<AddressPoint> mcrPoints;
         try (McrClient mcr = new McrClient(jdbcUrl)) {
-            mcrPoints = mcr.queryAddressPoints(queryTiles, product, licenseZone);
+            mcrPoints = mcr.queryAddressPoints(queryTiles, product, licenseZone, language);
         }
         System.out.printf("       MCR points (wide area): %,d%n", mcrPoints.size());
 

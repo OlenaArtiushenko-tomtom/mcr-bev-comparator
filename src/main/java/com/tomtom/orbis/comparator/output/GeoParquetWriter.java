@@ -18,6 +18,10 @@ import java.nio.ByteBuffer;
 import java.nio.file.Path;
 import java.util.Map;
 
+/**
+ * Writes comparison results as GeoParquet (1.1.0 spec) with all Orbis address
+ * components. Compatible with QGIS, DuckDB, and other GeoParquet readers.
+ */
 public class GeoParquetWriter {
 
     private static final String GEO_METADATA = """
@@ -60,13 +64,47 @@ public class GeoParquetWriter {
                 .requiredBytes("geometry")
                 .requiredDouble("longitude")
                 .requiredDouble("latitude")
+                // Source & type
                 .optionalString("source")
+                .optionalString("id")
+                .optionalString("address_point_type")
+                // Core address components (Orbis #Address Component)
                 .optionalString("street")
                 .optionalString("house_number")
                 .optionalString("postcode")
                 .optionalString("city")
-                .optionalString("address_point_type")
-                .optionalString("id")
+                .optionalString("suburb")
+                .optionalString("district")
+                .optionalString("province")
+                .optionalString("state")
+                .optionalString("county")
+                .optionalString("neighbourhood")
+                .optionalString("place")
+                .optionalString("house_name")
+                .optionalString("block")
+                .optionalString("floor")
+                .optionalString("unit")
+                .optionalString("door")
+                .optionalString("building_name")
+                .optionalString("building_complex")
+                .optionalString("building_section")
+                .optionalString("subaddress_area")
+                .optionalString("conscription_number")
+                .optionalString("street_number")
+                .optionalString("street_dependent")
+                .optionalString("location_code")
+                .optionalString("geographic_code")
+                .optionalString("townland")
+                // Parsed
+                .optionalString("parsed_street")
+                // Metadata
+                .optionalString("osm_identifier")
+                .optionalString("layer_id")
+                .optionalString("license")
+                .optionalString("license_zone")
+                .optionalString("supported")
+                .optionalString("location_provenance")
+                // Match info
                 .optionalDouble("match_distance_m")
                 .endRecord();
 
@@ -83,17 +121,12 @@ public class GeoParquetWriter {
                 .withExtraMetaData(Map.of("geo", GEO_METADATA))
                 .build()) {
 
-            // Write matched BEV points
             for (MatchPair m : result.getMatched()) {
                 writer.write(buildRecord(schema, wkbWriter, "matched", m.bev(), m.getDistanceMeters()));
             }
-
-            // Write BEV-only (missing from MCR)
             for (AddressPoint p : result.getBevOnly()) {
                 writer.write(buildRecord(schema, wkbWriter, "bev_only", p, null));
             }
-
-            // Write MCR-only (extra)
             for (AddressPoint p : result.getMcrOnly()) {
                 writer.write(buildRecord(schema, wkbWriter, "mcr_only", p, null));
             }
@@ -102,19 +135,50 @@ public class GeoParquetWriter {
 
     private GenericRecord buildRecord(Schema schema, WKBWriter wkbWriter,
                                        String status, AddressPoint p, Double matchDist) {
-        GenericRecord record = new GenericData.Record(schema);
-        record.put("match_status", status);
-        record.put("geometry", ByteBuffer.wrap(wkbWriter.write(p.getGeometry())));
-        record.put("longitude", p.getGeometry().getX());
-        record.put("latitude", p.getGeometry().getY());
-        record.put("source", p.getSource());
-        record.put("street", p.getStreet());
-        record.put("house_number", p.getHouseNumber());
-        record.put("postcode", p.getPostcode());
-        record.put("city", p.getCity());
-        record.put("address_point_type", p.getAddressPointType());
-        record.put("id", p.getId());
-        record.put("match_distance_m", matchDist);
-        return record;
+        GenericRecord r = new GenericData.Record(schema);
+        r.put("match_status", status);
+        r.put("geometry", ByteBuffer.wrap(wkbWriter.write(p.getGeometry())));
+        r.put("longitude", p.getGeometry().getX());
+        r.put("latitude", p.getGeometry().getY());
+        r.put("source", p.getSource());
+        r.put("id", p.getId());
+        r.put("address_point_type", p.getAddressPointType());
+        // Address components
+        r.put("street", p.getStreet());
+        r.put("house_number", p.getHouseNumber());
+        r.put("postcode", p.getPostcode());
+        r.put("city", p.getCity());
+        r.put("suburb", p.getSuburb());
+        r.put("district", p.getDistrict());
+        r.put("province", p.getProvince());
+        r.put("state", p.getState());
+        r.put("county", p.getCounty());
+        r.put("neighbourhood", p.getNeighbourhood());
+        r.put("place", p.getPlace());
+        r.put("house_name", p.getHouseName());
+        r.put("block", p.getBlock());
+        r.put("floor", p.getFloor());
+        r.put("unit", p.getUnit());
+        r.put("door", p.getDoor());
+        r.put("building_name", p.getBuildingName());
+        r.put("building_complex", p.getBuildingComplex());
+        r.put("building_section", p.getBuildingSection());
+        r.put("subaddress_area", p.getSubaddressArea());
+        r.put("conscription_number", p.getConscriptionNumber());
+        r.put("street_number", p.getStreetNumber());
+        r.put("street_dependent", p.getStreetDependent());
+        r.put("location_code", p.getLocationCode());
+        r.put("geographic_code", p.getGeographicCode());
+        r.put("townland", p.getTownland());
+        r.put("parsed_street", p.getParsedStreet());
+        // Metadata
+        r.put("osm_identifier", p.getOsmIdentifier());
+        r.put("layer_id", p.getLayerId());
+        r.put("license", p.getLicense());
+        r.put("license_zone", p.getLicenseZone());
+        r.put("supported", p.getSupported());
+        r.put("location_provenance", p.getLocationProvenance());
+        r.put("match_distance_m", matchDist);
+        return r;
     }
 }

@@ -47,21 +47,19 @@ public class BevGeopackageReader {
                     Coordinate c = geom.getCentroid().getCoordinate();
                     Point pt = gf.createPoint(new Coordinate(c.x, c.y));
 
-                    // Check if within tile boundary
                     if (!tileBoundary.contains(pt)) continue;
 
-                    String street = getAttr(f, "strassenname");
-                    String hsn = getAttr(f, "hsn");
-                    String plz = getAttr(f, "plz");
-                    String gemeinde = getAttr(f, "gemeindename");
-                    String ort = getAttr(f, "ortsname");
-
-                    points.add(new AddressPoint(
-                            "bev_" + (id++),
-                            street, hsn, plz,
-                            gemeinde != null ? gemeinde : ort,
-                            "bev", "building", pt
-                    ));
+                    points.add(AddressPoint.builder()
+                            .id("bev_" + (id++))
+                            .source("bev")
+                            .geometry(pt)
+                            .addressPointType("building")
+                            .street(getAttr(f, "strassenname"))
+                            .houseNumber(getAttr(f, "hsn"))
+                            .postcode(getAttr(f, "plz"))
+                            .city(getAttr(f, "gemeindename"))
+                            .suburb(getAttr(f, "ortsname"))
+                            .build());
                 }
             }
             return points;

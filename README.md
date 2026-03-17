@@ -49,6 +49,7 @@ java -jar target/mcr-bev-comparator-1.0-SNAPSHOT.jar \
 | `--token` | No | Databricks PAT (or `DATABRICKS_TOKEN` env var) |
 | `-o, --output-dir` | No | Output directory (default: `./output`) |
 | `--bev-layer` | No | GeoPackage layer name (default: first layer) |
+| `--language` | No | Language suffix for address tags (default: `de-Latn`) |
 | `--host` | No | Databricks host |
 | `--http-path` | No | Databricks SQL warehouse HTTP path |
 
@@ -85,3 +86,11 @@ java -jar target/mcr-bev-comparator-1.0-SNAPSHOT.jar \
 
 Per [Orbis spec](https://specs.tomtomgroup.com/orbis/documentation/platform/daily/specifications/feature_model/feature/address_point.html):
 an address point is a Node with tag `address_point` set to one of: `building`, `land_parcel`, `map_location`, `sub_address`.
+
+### Orbis Address Components
+
+All 30 [address components](https://specs.tomtomgroup.com/orbis/documentation/platform/daily/specifications/feature_model/namespace/address_component.html) are extracted from MCR tags:
+
+`block`, `building`, `buildingcomplex`, `buildingsection`, `city`, `conscriptionnumber`, `county`, `distance`, `district`, `door`, `floor`, `geographiccode`, `housename`, `housenumber`, `landmark:direction`, `landmark:nearby`, `locationcode`, `neighbourhood`, `place`, `postcode`, `province`, `state`, `street`, `street:dependent`, `street:number`, `streetnumber`, `subaddressarea`, `suburb`, `townland`, `unit`
+
+Plus metadata: `parsed:addr:street`, `osm_identifier`, `layer_id`, `license`, `license_zone`, `supported`, `location_provenance`.
